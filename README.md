@@ -4,18 +4,25 @@ PATH-based wrapper for the Claude Code CLI that adds provider switching (Kimi, G
 
 When a provider is selected, credentials are written to `~/.claude/settings.json`. When running plain `claude` (no provider), any previously injected provider config is removed automatically.
 
+## Prerequisites
+
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) must be installed before running the setup script:
+  ```bash
+  curl -fsSL https://claude.ai/install.sh | bash
+  ```
+
 ## Install
 
 ```bash
+git clone https://github.com/Alkhayal7/clauder.git
+cd clauder
 bash cc-switch.sh
 ```
 
 This will:
-1. Install Node.js if missing (package manager or NVM)
-2. Install the official Claude Code CLI
-3. Add `~/bin` to PATH
-4. Write the wrapper to `~/bin/claude`
-5. Create a sample `~/.claude_providers.ini` if missing
+1. Add `~/bin` to PATH
+2. Write the wrapper to `~/bin/claude`
+3. Create a sample `~/.claude_providers.ini` if missing
 
 After install, open a new terminal or run `source ~/.bashrc` (or `~/.zshrc`). Run `hash -r` if needed.
 
@@ -62,6 +69,4 @@ bash cc-switch.sh uninstall --purge  # remove wrapper and config
 ## Troubleshooting
 
 - `claude` not resolving to `~/bin/claude`: open a new terminal, source your shell rc, or run `hash -r`.
-- Node 20+ required. On glibc < 2.28 systems, the installer falls back to Node 18.
 - Set `CLAUDE_SWITCH_DEBUG=1` for verbose output.
-- If using `nvm`, keep `export PATH="$HOME/bin:$PATH"` after the nvm init lines in your shell rc.
