@@ -488,7 +488,7 @@ case "$CMD" in
     write_wrapper
     msg "Step 3/3: Writing sample config (if missing)..."
     write_sample_conf_if_absent
-    msg "✅ Installation complete."
+    msg "Installation complete."
     echo "Next: open a new terminal or source your shell rc (e.g., 'source ~/.bashrc'), then test 'claude --list'."
     verify
     ;;
