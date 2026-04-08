@@ -65,8 +65,3 @@ bash cc-switch.sh status             # show diagnostics
 bash cc-switch.sh uninstall          # remove wrapper
 bash cc-switch.sh uninstall --purge  # remove wrapper and config
 ```
-
-## Troubleshooting
-
-- `claude` not resolving to `~/bin/claude`: open a new terminal, source your shell rc, or run `hash -r`.
-- Set `CLAUDE_SWITCH_DEBUG=1` for verbose output.
