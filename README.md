@@ -94,17 +94,3 @@ bash cc-switch.sh status             # show diagnostics
 bash cc-switch.sh uninstall          # remove wrapper
 bash cc-switch.sh uninstall --purge  # remove wrapper and config
 ```
-
-```powershell
-# Windows
-./cc-switch.ps1 update
-./cc-switch.ps1 status
-./cc-switch.ps1 uninstall
-./cc-switch.ps1 uninstall -Purge
-```
-
-## Troubleshooting
-
-- `claude` not resolving to the wrapper: open a new terminal, source your shell rc (`hash -r`), or on Windows run `. $PROFILE`.
-- On Windows, quote ad-hoc accounts: `claude "@work"` (an unquoted `@work` is PowerShell splatting).
-- Set `CLAUDE_SWITCH_DEBUG=1` for verbose output (macOS/Linux).
