@@ -1,6 +1,6 @@
 # clauder
 
-PATH-based wrapper for the Claude Code CLI that adds provider switching (Kimi, GLM, Qwen, etc.) and multi-account support without modifying the official binary.
+A wrapper for the Claude Code CLI that adds provider switching (Kimi, GLM, Qwen, etc.) and multi-account support without modifying the official binary. Works on macOS, Linux (Bash/Zsh), and Windows (PowerShell).
 
 When a provider is selected, credentials are written to `~/.claude/settings.json`. When running plain `claude` (no provider), any previously injected provider config is removed automatically. Accounts isolate each login in its own folder, so you can run several Claude accounts (e.g. work and personal) at the same time.
 
@@ -13,18 +13,27 @@ When a provider is selected, credentials are written to `~/.claude/settings.json
 
 ## Install
 
+**macOS / Linux (Bash/Zsh):**
+
 ```bash
 git clone https://github.com/Alkhayal7/clauder.git
 cd clauder
 bash cc-switch.sh
 ```
 
-This will:
-1. Add `~/bin` to PATH
-2. Write the wrapper to `~/bin/claude`
-3. Create a sample `~/.claude_providers.ini` if missing
+Adds `~/bin` to PATH and writes the wrapper to `~/bin/claude`. Then open a new terminal or run `source ~/.bashrc` (or `~/.zshrc`); run `hash -r` if needed.
 
-After install, open a new terminal or run `source ~/.bashrc` (or `~/.zshrc`). Run `hash -r` if needed.
+**Windows (PowerShell):**
+
+```powershell
+git clone https://github.com/Alkhayal7/clauder.git
+cd clauder
+./cc-switch.ps1
+```
+
+Writes the wrapper to `~/.clauder` and sources it from your PowerShell profile. Then open a new terminal (or run `. $PROFILE`).
+
+Both installers create a sample `~/.claude_providers.ini` if one doesn't exist.
 
 ## Configuration
 
@@ -58,6 +67,8 @@ claude @work        # 'work' account (~/.claude-work)
 claude @work kimi   # 'work' account, using the kimi provider
 ```
 
+> On Windows PowerShell, quote the name so it isn't read as splatting: `claude "@work"`.
+
 ## Usage
 
 ```bash
@@ -71,13 +82,23 @@ claude --list         # list providers and accounts
 ## Maintenance
 
 ```bash
+# macOS / Linux
 bash cc-switch.sh update             # update the wrapper
 bash cc-switch.sh status             # show diagnostics
 bash cc-switch.sh uninstall          # remove wrapper
 bash cc-switch.sh uninstall --purge  # remove wrapper and config
 ```
 
+```powershell
+# Windows
+./cc-switch.ps1 update
+./cc-switch.ps1 status
+./cc-switch.ps1 uninstall
+./cc-switch.ps1 uninstall -Purge
+```
+
 ## Troubleshooting
 
-- `claude` not resolving to `~/bin/claude`: open a new terminal, source your shell rc, or run `hash -r`.
-- Set `CLAUDE_SWITCH_DEBUG=1` for verbose output.
+- `claude` not resolving to the wrapper: open a new terminal, source your shell rc (`hash -r`), or on Windows run `. $PROFILE`.
+- On Windows, quote ad-hoc accounts: `claude "@work"` (an unquoted `@work` is PowerShell splatting).
+- Set `CLAUDE_SWITCH_DEBUG=1` for verbose output (macOS/Linux).
