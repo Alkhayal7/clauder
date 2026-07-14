@@ -6,9 +6,15 @@ When a provider is selected, credentials are written to `~/.claude/settings.json
 
 ## Prerequisites
 
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) must be installed before running the setup script:
+The [Claude Code CLI](https://code.claude.com/docs/en/quickstart) must be installed before running the setup script.
+
+- **macOS / Linux:**
   ```bash
   curl -fsSL https://claude.ai/install.sh | bash
+  ```
+- **Windows:**
+  ```powershell
+  winget install Anthropic.ClaudeCode
   ```
 
 ## Install

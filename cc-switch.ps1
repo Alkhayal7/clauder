@@ -199,7 +199,7 @@ function claude {
     # ---- locate the official CLI (exclude this function) and run it ----
     $real = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $real) {
-        Write-Host "Official Claude CLI not found. Install: irm https://claude.ai/install.ps1 | iex" -ForegroundColor Red
+        Write-Host "Official Claude CLI not found. Install: winget install Anthropic.ClaudeCode" -ForegroundColor Red
         return
     }
     & $real.Source @rest
