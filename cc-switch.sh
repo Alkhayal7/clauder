@@ -130,7 +130,7 @@ write_wrapper() {
 set -euo pipefail
 
 CONFIG="${CLAUDE_CONF:-$HOME/.claude_providers.ini}"
-CLAUDE_DIR="${HOME}/.claude"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SETTINGS_PATH="${CLAUDE_DIR}/settings.json"
 
 get_ini_value() {
@@ -151,24 +151,127 @@ get_ini_value() {
 # ---- --list providers ----
 if [[ "${1:-}" == "--list" ]]; then
   if [[ -f "$CONFIG" ]]; then
-    echo "Available Claude providers in $CONFIG:"
+    echo "Available Claude providers/accounts in $CONFIG:"
     awk '
-      /^\[.*\]/ {
-        sec=substr($0,2,length($0)-2);
-        printf "  - %s\n", sec
-      }' "$CONFIG"
-    echo ""
-    echo "Usage: claude <provider> [args...]"
-    echo "       claude [args...] (uses official Anthropic Claude)"
+      function flush() {
+        if (sec != "") {
+          if (dir != "") printf "  - %s  (account: %s)\n", sec, dir
+          else printf "  - %s\n", sec
+        }
+      }
+      /^\[.*\]/ { flush(); sec=substr($0,2,length($0)-2); dir=""; next }
+      /^[ \t]*CLAUDE_CONFIG_DIR[ \t]*=/ {
+        v=substr($0, index($0,"=")+1); gsub(/^[ \t]+|[ \t]+$/, "", v); dir=v
+      }
+      END { flush() }
+    ' "$CONFIG"
   else
     echo "Config file not found: $CONFIG"
-    echo ""
-    echo "Usage: claude [args...] (uses official Anthropic Claude)"
   fi
+  # Accounts: the default login (~/.claude) plus any created via 'claude @<name>'
+  echo ""
+  echo "Accounts:"
+  if [[ -d "$HOME/.claude" ]]; then
+    echo "  - (default)  ~/.claude   # plain 'claude' with no @name"
+  else
+    echo "  - (default)  ~/.claude   # plain 'claude'; created on first run"
+  fi
+  shopt -s nullglob
+  adhoc=("$HOME"/.claude-*)
+  shopt -u nullglob
+  for d in "${adhoc[@]}"; do
+    [ -d "$d" ] || continue
+    name="${d##*/.claude-}"
+    printf "  - @%-8s ~/.claude-%s\n" "$name" "$name"
+  done
+  echo ""
+  echo "Usage: claude [args...]                    # default account (~/.claude)"
+  echo "       claude <provider> [args...]         # default account, switch provider"
+  echo "       claude @<name> [provider] [args...] # named account in ~/.claude-<name>"
   exit 0
 fi
 
-# ---- check if first arg is a valid provider ----
+clean_provider_env() {
+  # Remove any previously injected provider env keys from a settings.json
+  local settings="$1"
+  [[ -f "$settings" ]] || return 0
+  SETTINGS_PATH="$settings" node <<'NODE'
+const fs = require('fs');
+const settingsPath = process.env.SETTINGS_PATH;
+const keysToRemove = [
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
+];
+try {
+  const raw = fs.readFileSync(settingsPath, 'utf8');
+  const data = raw.trim() ? JSON.parse(raw) : {};
+  if (data.env) {
+    let changed = false;
+    for (const k of keysToRemove) {
+      if (k in data.env) { delete data.env[k]; changed = true; }
+    }
+    if (changed) {
+      if (Object.keys(data.env).length === 0) delete data.env;
+      fs.writeFileSync(settingsPath, JSON.stringify(data, null, 2));
+    }
+  }
+} catch (_) {}
+NODE
+}
+
+run_claude() {
+  # Locate the official CLI (absolute paths to avoid recursion) and exec it
+  local self_path
+  self_path="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+  local entry candidate
+  local -a path_entries candidates
+  candidates=(
+    "$HOME/.local/bin/claude"
+    "$HOME/.claude/bin/claude"
+    "/usr/local/bin/claude"
+    "/usr/bin/claude"
+    "/opt/homebrew/bin/claude"
+  )
+  IFS=':' read -r -a path_entries <<< "${PATH:-}"
+  for entry in "${path_entries[@]}"; do
+    [ -z "$entry" ] && continue
+    candidate="${entry%/}/claude"
+    if [[ -x "$candidate" && "$candidate" != "$self_path" ]]; then
+      candidates+=("$candidate")
+      break
+    fi
+  done
+
+  local p
+  for p in "${candidates[@]}"; do
+    if [[ -x "$p" && "$p" != "$self_path" ]]; then
+      exec "$p" "$@"
+    fi
+  done
+
+  echo "Official Claude CLI not found. Please install: curl -fsSL https://claude.ai/install.sh | bash" >&2
+  exit 1
+}
+
+# ---- dynamic accounts: claude @<name> [provider] [args...] ----
+# Each account keeps its own login/settings in ~/.claude-<name>, created on
+# first use. Any number of accounts can run side by side.
+account=""
+if [[ "${1:-}" =~ ^@([a-zA-Z0-9_-]+)$ ]]; then
+  account="${BASH_REMATCH[1]}"
+  shift
+  export CLAUDE_CONFIG_DIR="$HOME/.claude-${account}"
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+  CLAUDE_DIR="$CLAUDE_CONFIG_DIR"
+  SETTINGS_PATH="${CLAUDE_DIR}/settings.json"
+  echo ">>> Using account: @${account} (${CLAUDE_CONFIG_DIR})" >&2
+fi
+
+# ---- check if first arg is a valid provider/account section ----
 provider=""
 maybe_provider="${1:-}"
 if [[ -n "$maybe_provider" && "$maybe_provider" != -* && "$maybe_provider" =~ ^[a-zA-Z0-9_-]+$ ]]; then
@@ -180,6 +283,18 @@ if [[ -n "$maybe_provider" && "$maybe_provider" != -* && "$maybe_provider" =~ ^[
 fi
 
 if [[ -n "$provider" ]]; then
+  # ---- account support: a section may pin its own CLAUDE_CONFIG_DIR so
+  # separate logins (e.g. work/personal) can run side by side ----
+  config_dir=$(get_ini_value "$provider" "CLAUDE_CONFIG_DIR")
+  if [[ -n "${config_dir:-}" ]]; then
+    config_dir="${config_dir/#\~/$HOME}"
+    export CLAUDE_CONFIG_DIR="$config_dir"
+    mkdir -p "$config_dir"
+    CLAUDE_DIR="$config_dir"
+    SETTINGS_PATH="${CLAUDE_DIR}/settings.json"
+    echo ">>> Using account: ${provider} (${CLAUDE_CONFIG_DIR})" >&2
+  fi
+
   auth_token=$(get_ini_value "$provider" "ANTHROPIC_AUTH_TOKEN")
   [[ -z "${auth_token:-}" ]] && auth_token=$(get_ini_value "$provider" "API_KEY") # backward compat
 
@@ -200,6 +315,17 @@ if [[ -n "$provider" ]]; then
   [[ -z "${default_haiku:-}" ]] && default_haiku="$legacy_small_fast"
   [[ -z "${default_haiku:-}" ]] && default_haiku="$legacy_model"
   [[ -z "${default_opus:-}" ]] && default_opus="$legacy_model"
+
+  if [[ -z "${auth_token:-}" && -z "${base_url:-}" ]]; then
+    if [[ -n "${config_dir:-}" ]]; then
+      # Account-only section: official Anthropic login isolated in its own
+      # config dir. Make sure no leftover provider env shadows the login.
+      clean_provider_env "$SETTINGS_PATH"
+      run_claude "$@"
+    fi
+    printf "✖ Section [%s] defines neither provider keys (ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL) nor CLAUDE_CONFIG_DIR.\n" "$provider" >&2
+    exit 1
+  fi
 
   missing=()
   [[ -z "${auth_token:-}" ]] && missing+=("ANTHROPIC_AUTH_TOKEN")
@@ -251,73 +377,11 @@ console.error(`>>> Using provider: ${process.env.PROVIDER}`);
 NODE
 else
   # No provider — remove any previously injected provider env keys from settings.json
-  if [[ -f "$SETTINGS_PATH" ]]; then
-    SETTINGS_PATH="$SETTINGS_PATH" node <<'NODE'
-const fs = require('fs');
-const settingsPath = process.env.SETTINGS_PATH;
-const keysToRemove = [
-  'ANTHROPIC_AUTH_TOKEN',
-  'ANTHROPIC_BASE_URL',
-  'ANTHROPIC_DEFAULT_SONNET_MODEL',
-  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-  'ANTHROPIC_DEFAULT_OPUS_MODEL',
-];
-try {
-  const raw = fs.readFileSync(settingsPath, 'utf8');
-  const data = raw.trim() ? JSON.parse(raw) : {};
-  if (data.env) {
-    let changed = false;
-    for (const k of keysToRemove) {
-      if (k in data.env) { delete data.env[k]; changed = true; }
-    }
-    if (changed) {
-      if (Object.keys(data.env).length === 0) delete data.env;
-      fs.writeFileSync(settingsPath, JSON.stringify(data, null, 2));
-    }
-  }
-} catch (_) {}
-NODE
-  fi
+  clean_provider_env "$SETTINGS_PATH"
 fi
 
-# ---- locate official CLI (absolute paths to avoid recursion) ----
-SELF_PATH="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-
-find_on_path() {
-  local entry candidate
-  local -a path_entries
-  IFS=':' read -r -a path_entries <<< "${PATH:-}"
-  for entry in "${path_entries[@]}"; do
-    [ -z "$entry" ] && continue
-    candidate="${entry%/}/claude"
-    if [[ -x "$candidate" && "$candidate" != "$SELF_PATH" ]]; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-  return 1
-}
-
-CANDIDATES=(
-  "$HOME/.local/bin/claude"
-  "$HOME/.claude/bin/claude"
-  "/usr/local/bin/claude"
-  "/usr/bin/claude"
-  "/opt/homebrew/bin/claude"
-)
-
-if found="$(find_on_path)"; then
-  CANDIDATES+=("$found")
-fi
-
-for p in "${CANDIDATES[@]}"; do
-  if [[ -x "$p" ]]; then
-    exec "$p" "$@"
-  fi
-done
-
-echo "Official Claude CLI not found. Please install: curl -fsSL https://claude.ai/install.sh | bash" >&2
-exit 1
+# ---- locate official CLI and run it ----
+run_claude "$@"
 SH
 
   mkdir -p "$(dirname "$WRAPPER_PATH")"
@@ -335,6 +399,16 @@ write_sample_conf_if_absent() {
 # Providers (Anthropic-compatible API)
 # Usage: claude <provider_name> [args...]
 #        claude [args...] (uses official Anthropic Claude)
+
+# Accounts — run multiple Claude Code logins side by side.
+# A section with CLAUDE_CONFIG_DIR keeps its own login/settings in that folder.
+# First run of 'claude work' will prompt you to log in with that account.
+#
+# [work]
+# CLAUDE_CONFIG_DIR=~/.claude-work
+#
+# [personal]
+# CLAUDE_CONFIG_DIR=~/.claude-personal
 
 [kimi]
 ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx

@@ -1,8 +1,8 @@
 # clauder
 
-PATH-based wrapper for the Claude Code CLI that adds provider switching (Kimi, GLM, Qwen, etc.) without modifying the official binary.
+PATH-based wrapper for the Claude Code CLI that adds provider switching (Kimi, GLM, Qwen, etc.) and multi-account support without modifying the official binary.
 
-When a provider is selected, credentials are written to `~/.claude/settings.json`. When running plain `claude` (no provider), any previously injected provider config is removed automatically.
+When a provider is selected, credentials are written to `~/.claude/settings.json`. When running plain `claude` (no provider), any previously injected provider config is removed automatically. Accounts isolate each login in its own folder, so you can run several Claude accounts (e.g. work and personal) at the same time.
 
 ## Prerequisites
 
@@ -48,13 +48,24 @@ ANTHROPIC_DEFAULT_OPUS_MODEL=glm-4.7
 
 `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are required. The model keys are optional.
 
+### Accounts
+
+Prefix any name with `@` to run it as a separate account, stored in its own `~/.claude-<name>` folder (created on first use). Plain `claude` is the default account (`~/.claude`). Each account has its own login, so you can run several at once in separate terminals.
+
+```bash
+claude              # default account (~/.claude)
+claude @work        # 'work' account (~/.claude-work)
+claude @work kimi   # 'work' account, using the kimi provider
+```
+
 ## Usage
 
 ```bash
-claude                # default Anthropic Claude (cleans provider env from settings)
-claude kimi           # use kimi provider
-claude glm            # use glm provider
-claude --list         # list configured providers
+claude                # default account, official Anthropic Claude
+claude kimi           # switch provider (kimi, glm, ...)
+claude @work          # named account in ~/.claude-work
+claude @work kimi     # named account with a provider
+claude --list         # list providers and accounts
 ```
 
 ## Maintenance
