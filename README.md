@@ -39,11 +39,17 @@ cd clauder
 
 Writes the wrapper to `~/.clauder` and sources it from your PowerShell profile. Then open a new terminal (or run `. $PROFILE`).
 
+If you get "running scripts is disabled on this system", enable local scripts once:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
 Both installers create a sample `~/.claude_providers.ini` if one doesn't exist.
 
 ## Configuration
 
-Edit `~/.claude_providers.ini` (override path with `CLAUDE_CONF=/path/to/file`):
+Edit `~/.claude_providers.ini` (override path with `CLAUDE_CONF=/path/to/file`). On Windows this is `C:\Users\<you>\.claude_providers.ini` — open it with `notepad $HOME\.claude_providers.ini`.
 
 ```ini
 [kimi]
