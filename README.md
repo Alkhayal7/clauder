@@ -100,3 +100,5 @@ bash cc-switch.sh status             # show diagnostics
 bash cc-switch.sh uninstall          # remove wrapper
 bash cc-switch.sh uninstall --purge  # remove wrapper and config
 ```
+
+hi abdo 👋❤️
