@@ -1,4 +1,4 @@
-# clauder
+no# clauder
 
 A wrapper for the Claude Code CLI that adds provider switching (Kimi, GLM, Qwen, etc.) and multi-account support without modifying the official binary. Works on macOS, Linux (Bash/Zsh), and Windows (PowerShell).
 
@@ -100,5 +100,3 @@ bash cc-switch.sh status             # show diagnostics
 bash cc-switch.sh uninstall          # remove wrapper
 bash cc-switch.sh uninstall --purge  # remove wrapper and config
 ```
-
-hi abdo 👋❤️
