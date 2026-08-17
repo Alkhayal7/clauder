@@ -34,7 +34,7 @@ $WrapperContent = @'
 function claude {
     $configFile = if ($env:CLAUDE_CONF) { $env:CLAUDE_CONF } else { Join-Path $HOME '.claude_providers.ini' }
     $providerKeys = @(
-        'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+        'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
         'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL'
     )
 
@@ -162,10 +162,16 @@ function claude {
             Write-Host ">>> Using account: $provider ($dirOverride)"
         }
 
-        $auth = $sec['ANTHROPIC_AUTH_TOKEN']; if (-not $auth) { $auth = $sec['API_KEY'] }
+        $apiKey = $sec['ANTHROPIC_API_KEY']
+        $authToken = $sec['ANTHROPIC_AUTH_TOKEN']; if (-not $authToken) { $authToken = $sec['API_KEY'] }
         $base = $sec['ANTHROPIC_BASE_URL'];   if (-not $base) { $base = $sec['BASE_URL'] }
 
-        if (-not $auth -and -not $base) {
+        if ($apiKey -and $authToken) {
+            Write-Host "X Provider [$provider] sets both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN; choose one." -ForegroundColor Red
+            return
+        }
+
+        if (-not $apiKey -and -not $authToken -and -not $base) {
             if ($dirOverride) {
                 # Account-only section: official login isolated in its own dir.
                 Write-Settings $settingsPath @{} $providerKeys | Out-Null
@@ -175,20 +181,21 @@ function claude {
             }
         } else {
             $missing = @()
-            if (-not $auth) { $missing += 'ANTHROPIC_AUTH_TOKEN' }
+            if (-not $apiKey -and -not $authToken) { $missing += 'ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN' }
             if (-not $base) { $missing += 'ANTHROPIC_BASE_URL' }
             if ($missing.Count -gt 0) {
                 Write-Host "X Provider [$provider] incomplete (missing: $($missing -join ', '))." -ForegroundColor Red
                 return
             }
             $updates = [ordered]@{
-                ANTHROPIC_AUTH_TOKEN           = $auth
+                ANTHROPIC_API_KEY              = $apiKey
+                ANTHROPIC_AUTH_TOKEN           = $authToken
                 ANTHROPIC_BASE_URL             = $base
                 ANTHROPIC_DEFAULT_SONNET_MODEL = $sec['ANTHROPIC_DEFAULT_SONNET_MODEL']
                 ANTHROPIC_DEFAULT_HAIKU_MODEL  = $sec['ANTHROPIC_DEFAULT_HAIKU_MODEL']
                 ANTHROPIC_DEFAULT_OPUS_MODEL   = $sec['ANTHROPIC_DEFAULT_OPUS_MODEL']
             }
-            if (-not (Write-Settings $settingsPath $updates @())) { return }
+            if (-not (Write-Settings $settingsPath $updates $providerKeys)) { return }
             Write-Host ">>> Using provider: $provider"
         }
     } else {
@@ -231,6 +238,13 @@ ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic/
 ANTHROPIC_DEFAULT_SONNET_MODEL=glm-4.5
 ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-4.5-air
 ANTHROPIC_DEFAULT_OPUS_MODEL=glm-4.5
+
+[go]
+ANTHROPIC_API_KEY=sk-xxxxxxxxxxxxxxxx
+ANTHROPIC_BASE_URL=https://opencode.ai/zen/go
+ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-flash
 '@
 
 # ------------------------------------------------------------------
