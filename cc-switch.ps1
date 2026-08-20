@@ -33,9 +33,17 @@ $WrapperContent = @'
 # clauder wrapper - provider & account switching for Claude Code.
 function claude {
     $configFile = if ($env:CLAUDE_CONF) { $env:CLAUDE_CONF } else { Join-Path $HOME '.claude_providers.ini' }
+    # Keys older versions of this wrapper injected; always cleaned up even if
+    # the section that introduced them is gone from the config.
     $providerKeys = @(
         'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
         'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL'
+    )
+    # Wrapper directives and legacy aliases: consumed here or translated into an
+    # ANTHROPIC_* name, never exported to settings.json verbatim.
+    $configOnlyKeys = @(
+        'CLAUDE_CONFIG_DIR', 'API_KEY', 'BASE_URL', 'MODEL', 'SMALL_FAST_MODE',
+        'ANTHROPIC_MODEL', 'ANTHROPIC_SMALL_FAST_MODE'
     )
 
     function ConvertTo-Hashtable($obj) {
@@ -62,7 +70,12 @@ function claude {
             if ($t -eq '' -or $t.StartsWith('#') -or $t.StartsWith(';')) { continue }
             if ($t -match '^\[(.+)\]$') { $current = $Matches[1].Trim(); $sections[$current] = [ordered]@{} }
             elseif ($current -and $t -match '^([^=]+)=(.*)$') {
-                $sections[$current][$Matches[1].Trim()] = $Matches[2].Trim()
+                # Strip one layer of surrounding quotes: KEY=value and KEY="value" are the same.
+                $v = $Matches[2].Trim()
+                if ($v.Length -gt 1 -and (($v.StartsWith('"') -and $v.EndsWith('"')) -or ($v.StartsWith("'") -and $v.EndsWith("'")))) {
+                    $v = $v.Substring(1, $v.Length - 2)
+                }
+                $sections[$current][$Matches[1].Trim()] = $v
             }
         }
         return $sections
@@ -71,6 +84,19 @@ function claude {
     function Expand-ConfigDir($dir) {
         if ($dir -like '~*') { return Join-Path $HOME ($dir.Substring(1).TrimStart('/', '\')) }
         return $dir
+    }
+
+    # Every key used anywhere in the config: the set this wrapper may manage, so
+    # switching providers drops keys the new section does not define.
+    function Get-ManagedKeys($sections) {
+        $keys = [System.Collections.Generic.List[string]]::new()
+        foreach ($k in $providerKeys) { $keys.Add($k) }
+        foreach ($name in $sections.Keys) {
+            foreach ($k in $sections[$name].Keys) {
+                if ($k -ne 'CLAUDE_CONFIG_DIR' -and -not $keys.Contains($k)) { $keys.Add($k) }
+            }
+        }
+        return , $keys
     }
 
     function Write-Settings($settingsPath, $envUpdates, $removeKeys) {
@@ -140,9 +166,10 @@ function claude {
     $settingsPath = Join-Path $configDir 'settings.json'
 
     # ---- provider section? ----
+    $sections = Get-IniSections $configFile
+    $managedKeys = Get-ManagedKeys $sections
     $provider = $null
     if ($rest.Count -ge 1 -and $rest[0] -match '^[A-Za-z0-9_-]+$') {
-        $sections = Get-IniSections $configFile
         if ($sections.Contains($rest[0])) {
             $provider = $rest[0]
             $rest = @($rest | Select-Object -Skip 1)
@@ -150,7 +177,7 @@ function claude {
     }
 
     if ($provider) {
-        $sec = (Get-IniSections $configFile)[$provider]
+        $sec = $sections[$provider]
 
         # A section may pin its own CLAUDE_CONFIG_DIR (named account preset).
         $dirOverride = $sec['CLAUDE_CONFIG_DIR']
@@ -174,7 +201,7 @@ function claude {
         if (-not $apiKey -and -not $authToken -and -not $base) {
             if ($dirOverride) {
                 # Account-only section: official login isolated in its own dir.
-                Write-Settings $settingsPath @{} $providerKeys | Out-Null
+                Write-Settings $settingsPath @{} $managedKeys | Out-Null
             } else {
                 Write-Host "X Section [$provider] defines neither provider keys nor CLAUDE_CONFIG_DIR." -ForegroundColor Red
                 return
@@ -187,20 +214,34 @@ function claude {
                 Write-Host "X Provider [$provider] incomplete (missing: $($missing -join ', '))." -ForegroundColor Red
                 return
             }
-            $updates = [ordered]@{
-                ANTHROPIC_API_KEY              = $apiKey
-                ANTHROPIC_AUTH_TOKEN           = $authToken
-                ANTHROPIC_BASE_URL             = $base
-                ANTHROPIC_DEFAULT_SONNET_MODEL = $sec['ANTHROPIC_DEFAULT_SONNET_MODEL']
-                ANTHROPIC_DEFAULT_HAIKU_MODEL  = $sec['ANTHROPIC_DEFAULT_HAIKU_MODEL']
-                ANTHROPIC_DEFAULT_OPUS_MODEL   = $sec['ANTHROPIC_DEFAULT_OPUS_MODEL']
+            $legacyModel = $sec['ANTHROPIC_MODEL']; if (-not $legacyModel) { $legacyModel = $sec['MODEL'] }
+            $legacySmall = $sec['ANTHROPIC_SMALL_FAST_MODE']; if (-not $legacySmall) { $legacySmall = $sec['SMALL_FAST_MODE'] }
+            $sonnet = $sec['ANTHROPIC_DEFAULT_SONNET_MODEL']; if (-not $sonnet) { $sonnet = $legacyModel }
+            $haiku  = $sec['ANTHROPIC_DEFAULT_HAIKU_MODEL']
+            if (-not $haiku) { $haiku = $legacySmall }
+            if (-not $haiku) { $haiku = $legacyModel }
+            $opus   = $sec['ANTHROPIC_DEFAULT_OPUS_MODEL']; if (-not $opus) { $opus = $legacyModel }
+
+            # Any other key in the section (ANTHROPIC_CUSTOM_HEADERS,
+            # CLAUDE_CODE_SUBAGENT_MODEL, ...) is passed through as-is; the
+            # resolved values are set last so aliases win over raw keys.
+            $updates = [ordered]@{}
+            foreach ($k in $sec.Keys) {
+                if ($configOnlyKeys -contains $k) { continue }
+                $updates[$k] = $sec[$k]
             }
-            if (-not (Write-Settings $settingsPath $updates $providerKeys)) { return }
+            $updates['ANTHROPIC_API_KEY']              = $apiKey
+            $updates['ANTHROPIC_AUTH_TOKEN']           = $authToken
+            $updates['ANTHROPIC_BASE_URL']             = $base
+            $updates['ANTHROPIC_DEFAULT_SONNET_MODEL'] = $sonnet
+            $updates['ANTHROPIC_DEFAULT_HAIKU_MODEL']  = $haiku
+            $updates['ANTHROPIC_DEFAULT_OPUS_MODEL']   = $opus
+            if (-not (Write-Settings $settingsPath $updates $managedKeys)) { return }
             Write-Host ">>> Using provider: $provider"
         }
     } else {
         # No provider - strip any previously injected provider env.
-        Write-Settings $settingsPath @{} $providerKeys | Out-Null
+        Write-Settings $settingsPath @{} $managedKeys | Out-Null
     }
 
     # ---- locate the official CLI (exclude this function) and run it ----
@@ -217,6 +258,10 @@ $SampleConf = @'
 # Providers (Anthropic-compatible API)
 # Usage: claude <provider_name> [args...]
 #        claude [args...] (uses official Anthropic Claude)
+#
+# Any other key in a section is written to settings.json as-is, e.g.
+# CLAUDE_CODE_SUBAGENT_MODEL or ANTHROPIC_CUSTOM_HEADERS. Quotes around a
+# value are optional and stripped, so KEY=value and KEY="value" are the same.
 
 # Accounts - run multiple Claude Code logins side by side.
 # Prefix any name with @ (e.g. 'claude @work') for an ad-hoc account.
@@ -228,23 +273,30 @@ $SampleConf = @'
 [kimi]
 ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
 ANTHROPIC_BASE_URL=https://api.kimi.com/coding/
-ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-for-coding
-ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-for-coding
-ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-for-coding
+ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.5
+ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2.5
+ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.5
 
 [glm]
 ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
 ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic/
-ANTHROPIC_DEFAULT_SONNET_MODEL=glm-4.5
-ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-4.5-air
-ANTHROPIC_DEFAULT_OPUS_MODEL=glm-4.5
+ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5
+ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5
+ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5
+
+[deepseek]
+ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro
 
 [go]
 ANTHROPIC_API_KEY=sk-xxxxxxxxxxxxxxxx
 ANTHROPIC_BASE_URL=https://opencode.ai/zen/go
 ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
 ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
-ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro
 '@
 
 # ------------------------------------------------------------------

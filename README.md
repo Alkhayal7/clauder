@@ -55,23 +55,30 @@ Edit `~/.claude_providers.ini` (override path with `CLAUDE_CONF=/path/to/file`).
 [kimi]
 ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
 ANTHROPIC_BASE_URL=https://api.kimi.com/coding/
-ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-for-coding
-ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-for-coding
-ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-for-coding
+ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.5
+ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2.5
+ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.5
 
 [glm]
 ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
 ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic/
-ANTHROPIC_DEFAULT_SONNET_MODEL=glm-4.7
-ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-4.7
-ANTHROPIC_DEFAULT_OPUS_MODEL=glm-4.7
+ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5
+ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5
+ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5
+
+[deepseek]
+ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro
 
 [go]
 ANTHROPIC_API_KEY=sk-xxxxxxxxxxxxxxxx
 ANTHROPIC_BASE_URL=https://opencode.ai/zen/go
 ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
 ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
-ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro
 ```
 
 Set exactly one credential key and provide `ANTHROPIC_BASE_URL`:
@@ -79,7 +86,24 @@ Set exactly one credential key and provide `ANTHROPIC_BASE_URL`:
 - `ANTHROPIC_API_KEY` sends the credential as `X-Api-Key` (for example, OpenCode Go).
 - `ANTHROPIC_AUTH_TOKEN` sends the credential as `Authorization: Bearer`.
 
-The model keys are optional. For OpenCode Go, omit `/v1` from the base URL because Claude Code appends the API path.
+For OpenCode Go, omit `/v1` from the base URL because Claude Code appends the API path.
+
+The model keys are optional. Any other key in a section is written to `settings.json` as-is, so provider-specific settings work too:
+
+```ini
+[wafer]
+ANTHROPIC_API_KEY=wfr_xxxxxxxxxxxx
+ANTHROPIC_BASE_URL=https://pass.wafer.ai
+ANTHROPIC_DEFAULT_SONNET_MODEL=DeepSeek-V4-Flash-0731-Fast
+ANTHROPIC_DEFAULT_HAIKU_MODEL=DeepSeek-V4-Flash-0731-Fast
+ANTHROPIC_DEFAULT_OPUS_MODEL=DeepSeek-V4-Flash-0731-Fast
+CLAUDE_CODE_SUBAGENT_MODEL=DeepSeek-V4-Flash-0731-Fast
+ANTHROPIC_CUSTOM_HEADERS=Wafer-ZDR: required
+```
+
+Quotes around a value are optional and stripped, so `KEY=value` and `KEY="value"` mean the same thing. Switching providers removes any key the new section does not define.
+
+Claude Code assumes a 200k context window for model names it doesn't recognize. If a provider's model has a larger one, append `[1m]` to the name (`deepseek-v4-flash[1m]`) or set `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, so auto-compact uses the real limit.
 
 ### Accounts
 

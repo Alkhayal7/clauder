@@ -133,19 +133,130 @@ CONFIG="${CLAUDE_CONF:-$HOME/.claude_providers.ini}"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 SETTINGS_PATH="${CLAUDE_DIR}/settings.json"
 
-get_ini_value() {
-  local section="$1" key="$2"
-  awk -F '=' -v sec="[$section]" -v key="$key" '
-    $0==sec {f=1; next}
-    /^\[/{f=0}
-    f {
-      k=$1; gsub(/^[ \t]+|[ \t]+$/, "", k)
-      if (k==key) {
-        v=$2; gsub(/^[ \t]+|[ \t]+$/, "", v)
-        print v; exit
+# Keys older versions of this wrapper injected into settings.json. Always
+# cleaned up, even if the section that introduced them is gone from the config.
+LEGACY_ENV_KEYS='ANTHROPIC_API_KEY
+ANTHROPIC_AUTH_TOKEN
+ANTHROPIC_BASE_URL
+ANTHROPIC_DEFAULT_SONNET_MODEL
+ANTHROPIC_DEFAULT_HAIKU_MODEL
+ANTHROPIC_DEFAULT_OPUS_MODEL'
+
+# Wrapper directives and legacy aliases: consumed here or translated into an
+# ANTHROPIC_* name, never exported to settings.json verbatim.
+is_config_only_key() {
+  case "$1" in
+    CLAUDE_CONFIG_DIR|API_KEY|BASE_URL|MODEL|SMALL_FAST_MODE|ANTHROPIC_MODEL|ANTHROPIC_SMALL_FAST_MODE) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Print every KEY=VALUE of one section. Splits on the first '=' so values may
+# contain '=', and strips one layer of surrounding quotes so both
+# KEY=value and KEY="value" mean the same thing.
+read_section() {
+  local section="$1"
+  awk -v sec="[$section]" '
+    BEGIN { q = sprintf("%c", 39) }
+    function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+    {
+      t = trim($0)
+      if (t ~ /^\[.*\]$/) { f = (t == sec); next }
+      if (!f || t == "" || t ~ /^[#;]/) next
+      i = index(t, "=")
+      if (i < 2) next
+      k = trim(substr(t, 1, i - 1))
+      v = trim(substr(t, i + 1))
+      if (length(v) > 1) {
+        a = substr(v, 1, 1); b = substr(v, length(v), 1)
+        if ((a == "\"" && b == "\"") || (a == q && b == q)) v = substr(v, 2, length(v) - 2)
       }
+      if (k != "") print k "=" v
     }
   ' "$CONFIG" 2>/dev/null
+}
+
+# Look up one key in the blob produced by read_section.
+section_get() {
+  printf '%s\n' "$1" | awk -v key="$2" '
+    { i = index($0, "="); if (i > 1 && substr($0, 1, i - 1) == key) { print substr($0, i + 1); exit } }
+  '
+}
+
+# Every key used anywhere in the config: the set this wrapper is allowed to
+# manage, so switching providers drops keys the new section does not define.
+managed_keys() {
+  printf '%s\n' "$LEGACY_ENV_KEYS"
+  awk '
+    function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+    {
+      t = trim($0)
+      if (t ~ /^\[.*\]$/ || t == "" || t ~ /^[#;]/) next
+      i = index(t, "=")
+      if (i < 2) next
+      k = trim(substr(t, 1, i - 1))
+      if (k == "" || k == "CLAUDE_CONFIG_DIR") next
+      if (!(k in seen)) { seen[k] = 1; print k }
+    }
+  ' "$CONFIG" 2>/dev/null
+}
+
+# apply_settings <settings_path> [provider_env_blob]
+# Rewrites the managed env keys in settings.json. An empty blob just cleans.
+apply_settings() {
+  SETTINGS_FILE="$1" PROVIDER_ENV="${2:-}" REMOVE_KEYS="$(managed_keys)" node <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const settingsPath = process.env.SETTINGS_FILE;
+const lines = (raw) => (raw || '').split('\n').map((l) => l.trim()).filter(Boolean);
+
+const envUpdates = {};
+for (const line of lines(process.env.PROVIDER_ENV)) {
+  const i = line.indexOf('=');
+  if (i < 1) continue;
+  const key = line.slice(0, i).trim();
+  const value = line.slice(i + 1);
+  if (key && value !== '') envUpdates[key] = value;
+}
+const removeKeys = lines(process.env.REMOVE_KEYS);
+const isProvider = Object.keys(envUpdates).length > 0;
+
+let raw = '';
+if (fs.existsSync(settingsPath)) {
+  raw = fs.readFileSync(settingsPath, 'utf8');
+}
+
+let data = {};
+if (raw.trim()) {
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    console.error(`✖ Failed to parse ${settingsPath}: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+data.env = { ...(data.env || {}) };
+for (const key of removeKeys) delete data.env[key];
+Object.assign(data.env, envUpdates);
+if (Object.keys(data.env).length === 0) delete data.env;
+
+if (isProvider) {
+  if (!data.permissions) data.permissions = { allow: [], deny: [] };
+  if (typeof data.alwaysThinkingEnabled === 'undefined') data.alwaysThinkingEnabled = true;
+}
+
+const next = JSON.stringify(data, null, 2);
+if (next !== raw) {
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, next);
+}
+NODE
+}
+
+get_ini_value() {
+  section_get "$(read_section "$1")" "$2"
 }
 
 # ---- --list providers ----
@@ -153,15 +264,25 @@ if [[ "${1:-}" == "--list" ]]; then
   if [[ -f "$CONFIG" ]]; then
     echo "Available Claude providers/accounts in $CONFIG:"
     awk '
+      BEGIN { q = sprintf("%c", 39) }
+      function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
       function flush() {
         if (sec != "") {
           if (dir != "") printf "  - %s  (account: %s)\n", sec, dir
           else printf "  - %s\n", sec
         }
       }
-      /^\[.*\]/ { flush(); sec=substr($0,2,length($0)-2); dir=""; next }
-      /^[ \t]*CLAUDE_CONFIG_DIR[ \t]*=/ {
-        v=substr($0, index($0,"=")+1); gsub(/^[ \t]+|[ \t]+$/, "", v); dir=v
+      {
+        t = trim($0)
+        if (t ~ /^\[.*\]$/) { flush(); sec = substr(t, 2, length(t) - 2); dir = ""; next }
+        i = index(t, "=")
+        if (i < 2 || trim(substr(t, 1, i - 1)) != "CLAUDE_CONFIG_DIR") next
+        v = trim(substr(t, i + 1))
+        if (length(v) > 1) {
+          a = substr(v, 1, 1); b = substr(v, length(v), 1)
+          if ((a == "\"" && b == "\"") || (a == q && b == q)) v = substr(v, 2, length(v) - 2)
+        }
+        dir = v
       }
       END { flush() }
     ' "$CONFIG"
@@ -190,38 +311,6 @@ if [[ "${1:-}" == "--list" ]]; then
   echo "       claude @<name> [provider] [args...] # named account in ~/.claude-<name>"
   exit 0
 fi
-
-clean_provider_env() {
-  # Remove any previously injected provider env keys from a settings.json
-  local settings="$1"
-  [[ -f "$settings" ]] || return 0
-  SETTINGS_PATH="$settings" node <<'NODE'
-const fs = require('fs');
-const settingsPath = process.env.SETTINGS_PATH;
-const keysToRemove = [
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_AUTH_TOKEN',
-  'ANTHROPIC_BASE_URL',
-  'ANTHROPIC_DEFAULT_SONNET_MODEL',
-  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-  'ANTHROPIC_DEFAULT_OPUS_MODEL',
-];
-try {
-  const raw = fs.readFileSync(settingsPath, 'utf8');
-  const data = raw.trim() ? JSON.parse(raw) : {};
-  if (data.env) {
-    let changed = false;
-    for (const k of keysToRemove) {
-      if (k in data.env) { delete data.env[k]; changed = true; }
-    }
-    if (changed) {
-      if (Object.keys(data.env).length === 0) delete data.env;
-      fs.writeFileSync(settingsPath, JSON.stringify(data, null, 2));
-    }
-  }
-} catch (_) {}
-NODE
-}
 
 run_claude() {
   # Locate the official CLI (absolute paths to avoid recursion) and exec it
@@ -277,16 +366,18 @@ provider=""
 maybe_provider="${1:-}"
 if [[ -n "$maybe_provider" && "$maybe_provider" != -* && "$maybe_provider" =~ ^[a-zA-Z0-9_-]+$ ]]; then
   # Check if it matches a section in the config
-  if [[ -f "$CONFIG" ]] && grep -qE "^\[${maybe_provider}\]$" "$CONFIG" 2>/dev/null; then
+  if [[ -f "$CONFIG" ]] && grep -qE "^[[:space:]]*\[${maybe_provider}\][[:space:]]*$" "$CONFIG" 2>/dev/null; then
     provider="$maybe_provider"
     shift
   fi
 fi
 
 if [[ -n "$provider" ]]; then
+  section="$(read_section "$provider")"
+
   # ---- account support: a section may pin its own CLAUDE_CONFIG_DIR so
   # separate logins (e.g. work/personal) can run side by side ----
-  config_dir=$(get_ini_value "$provider" "CLAUDE_CONFIG_DIR")
+  config_dir=$(section_get "$section" "CLAUDE_CONFIG_DIR")
   if [[ -n "${config_dir:-}" ]]; then
     config_dir="${config_dir/#\~/$HOME}"
     export CLAUDE_CONFIG_DIR="$config_dir"
@@ -296,22 +387,22 @@ if [[ -n "$provider" ]]; then
     echo ">>> Using account: ${provider} (${CLAUDE_CONFIG_DIR})" >&2
   fi
 
-  api_key=$(get_ini_value "$provider" "ANTHROPIC_API_KEY")
-  auth_token=$(get_ini_value "$provider" "ANTHROPIC_AUTH_TOKEN")
-  [[ -z "${auth_token:-}" ]] && auth_token=$(get_ini_value "$provider" "API_KEY") # backward compat
+  api_key=$(section_get "$section" "ANTHROPIC_API_KEY")
+  auth_token=$(section_get "$section" "ANTHROPIC_AUTH_TOKEN")
+  [[ -z "${auth_token:-}" ]] && auth_token=$(section_get "$section" "API_KEY") # backward compat
 
-  base_url=$(get_ini_value "$provider" "ANTHROPIC_BASE_URL")
-  [[ -z "${base_url:-}" ]] && base_url=$(get_ini_value "$provider" "BASE_URL") # backward compat
+  base_url=$(section_get "$section" "ANTHROPIC_BASE_URL")
+  [[ -z "${base_url:-}" ]] && base_url=$(section_get "$section" "BASE_URL") # backward compat
 
-  default_sonnet=$(get_ini_value "$provider" "ANTHROPIC_DEFAULT_SONNET_MODEL")
-  default_haiku=$(get_ini_value "$provider" "ANTHROPIC_DEFAULT_HAIKU_MODEL")
-  default_opus=$(get_ini_value "$provider" "ANTHROPIC_DEFAULT_OPUS_MODEL")
+  default_sonnet=$(section_get "$section" "ANTHROPIC_DEFAULT_SONNET_MODEL")
+  default_haiku=$(section_get "$section" "ANTHROPIC_DEFAULT_HAIKU_MODEL")
+  default_opus=$(section_get "$section" "ANTHROPIC_DEFAULT_OPUS_MODEL")
 
-  legacy_model=$(get_ini_value "$provider" "ANTHROPIC_MODEL")
-  [[ -z "${legacy_model:-}" ]] && legacy_model=$(get_ini_value "$provider" "MODEL")
+  legacy_model=$(section_get "$section" "ANTHROPIC_MODEL")
+  [[ -z "${legacy_model:-}" ]] && legacy_model=$(section_get "$section" "MODEL")
 
-  legacy_small_fast=$(get_ini_value "$provider" "ANTHROPIC_SMALL_FAST_MODE")
-  [[ -z "${legacy_small_fast:-}" ]] && legacy_small_fast=$(get_ini_value "$provider" "SMALL_FAST_MODE")
+  legacy_small_fast=$(section_get "$section" "ANTHROPIC_SMALL_FAST_MODE")
+  [[ -z "${legacy_small_fast:-}" ]] && legacy_small_fast=$(section_get "$section" "SMALL_FAST_MODE")
 
   [[ -z "${default_sonnet:-}" ]] && default_sonnet="$legacy_model"
   [[ -z "${default_haiku:-}" ]] && default_haiku="$legacy_small_fast"
@@ -327,7 +418,7 @@ if [[ -n "$provider" ]]; then
     if [[ -n "${config_dir:-}" ]]; then
       # Account-only section: official Anthropic login isolated in its own
       # config dir. Make sure no leftover provider env shadows the login.
-      clean_provider_env "$SETTINGS_PATH"
+      apply_settings "$SETTINGS_PATH"
       run_claude "$@"
     fi
     printf "✖ Section [%s] defines neither provider keys nor CLAUDE_CONFIG_DIR.\n" "$provider" >&2
@@ -343,60 +434,29 @@ if [[ -n "$provider" ]]; then
     exit 1
   fi
 
-  export SETTINGS_PATH PROVIDER="$provider"
-  export API_KEY="$api_key" AUTH_TOKEN="$auth_token" BASE_URL="$base_url" DEFAULT_SONNET_MODEL="$default_sonnet" DEFAULT_HAIKU_MODEL="$default_haiku" DEFAULT_OPUS_MODEL="$default_opus"
+  # Any other key in the section (ANTHROPIC_CUSTOM_HEADERS,
+  # CLAUDE_CODE_SUBAGENT_MODEL, ...) is passed through to settings.json as-is;
+  # the resolved values below are appended last so aliases win over raw keys.
+  provider_env=""
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    key="${line%%=*}"
+    if is_config_only_key "$key"; then continue; fi
+    provider_env+="${line}"$'\n'
+  done <<< "$section"
 
-  node <<'NODE'
-const fs = require('fs');
-const path = require('path');
+  provider_env+="ANTHROPIC_API_KEY=${api_key}"$'\n'
+  provider_env+="ANTHROPIC_AUTH_TOKEN=${auth_token}"$'\n'
+  provider_env+="ANTHROPIC_BASE_URL=${base_url}"$'\n'
+  provider_env+="ANTHROPIC_DEFAULT_SONNET_MODEL=${default_sonnet}"$'\n'
+  provider_env+="ANTHROPIC_DEFAULT_HAIKU_MODEL=${default_haiku}"$'\n'
+  provider_env+="ANTHROPIC_DEFAULT_OPUS_MODEL=${default_opus}"$'\n'
 
-const settingsPath = process.env.SETTINGS_PATH;
-const claudeDir = path.dirname(settingsPath);
-const envUpdates = {};
-const maybeSet = (key, val) => {
-  if (typeof val !== 'undefined' && val !== '') envUpdates[key] = val;
-};
-maybeSet('ANTHROPIC_API_KEY', process.env.API_KEY);
-maybeSet('ANTHROPIC_AUTH_TOKEN', process.env.AUTH_TOKEN);
-maybeSet('ANTHROPIC_BASE_URL', process.env.BASE_URL);
-maybeSet('ANTHROPIC_DEFAULT_SONNET_MODEL', process.env.DEFAULT_SONNET_MODEL);
-maybeSet('ANTHROPIC_DEFAULT_HAIKU_MODEL', process.env.DEFAULT_HAIKU_MODEL);
-maybeSet('ANTHROPIC_DEFAULT_OPUS_MODEL', process.env.DEFAULT_OPUS_MODEL);
-
-fs.mkdirSync(claudeDir, { recursive: true });
-
-let data = {};
-if (fs.existsSync(settingsPath)) {
-  try {
-    const raw = fs.readFileSync(settingsPath, 'utf8');
-    data = raw.trim() ? JSON.parse(raw) : {};
-  } catch (err) {
-    console.error(`✖ Failed to parse ${settingsPath}: ${err.message}`);
-    process.exit(1);
-  }
-}
-
-data.env = { ...(data.env || {}) };
-for (const key of [
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_AUTH_TOKEN',
-  'ANTHROPIC_BASE_URL',
-  'ANTHROPIC_DEFAULT_SONNET_MODEL',
-  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-  'ANTHROPIC_DEFAULT_OPUS_MODEL',
-]) {
-  delete data.env[key];
-}
-Object.assign(data.env, envUpdates);
-if (!data.permissions) data.permissions = { allow: [], deny: [] };
-if (typeof data.alwaysThinkingEnabled === 'undefined') data.alwaysThinkingEnabled = true;
-
-fs.writeFileSync(settingsPath, JSON.stringify(data, null, 2));
-console.error(`>>> Using provider: ${process.env.PROVIDER}`);
-NODE
+  apply_settings "$SETTINGS_PATH" "$provider_env"
+  echo ">>> Using provider: ${provider}" >&2
 else
   # No provider — remove any previously injected provider env keys from settings.json
-  clean_provider_env "$SETTINGS_PATH"
+  apply_settings "$SETTINGS_PATH"
 fi
 
 # ---- locate official CLI and run it ----
@@ -418,6 +478,10 @@ write_sample_conf_if_absent() {
 # Providers (Anthropic-compatible API)
 # Usage: claude <provider_name> [args...]
 #        claude [args...] (uses official Anthropic Claude)
+#
+# Any other key in a section is written to settings.json as-is, e.g.
+# CLAUDE_CODE_SUBAGENT_MODEL or ANTHROPIC_CUSTOM_HEADERS. Quotes around a
+# value are optional and stripped, so KEY=value and KEY="value" are the same.
 
 # Accounts — run multiple Claude Code logins side by side.
 # A section with CLAUDE_CONFIG_DIR keeps its own login/settings in that folder.
@@ -432,23 +496,30 @@ write_sample_conf_if_absent() {
 [kimi]
 ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
 ANTHROPIC_BASE_URL=https://api.kimi.com/coding/
-ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-for-coding
-ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-for-coding
-ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-for-coding
+ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.5
+ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2.5
+ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.5
 
 [glm]
 ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
 ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic/
-ANTHROPIC_DEFAULT_SONNET_MODEL=glm-4.5
-ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-4.5-air
-ANTHROPIC_DEFAULT_OPUS_MODEL=glm-4.5
+ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5
+ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5
+ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5
+
+[deepseek]
+ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro
 
 [go]
 ANTHROPIC_API_KEY=sk-xxxxxxxxxxxxxxxx
 ANTHROPIC_BASE_URL=https://opencode.ai/zen/go
 ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
 ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
-ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro
 INI
   chmod 600 "$CONF_PATH" || true
 }
