@@ -65,9 +65,21 @@ ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic/
 ANTHROPIC_DEFAULT_SONNET_MODEL=glm-4.7
 ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-4.7
 ANTHROPIC_DEFAULT_OPUS_MODEL=glm-4.7
+
+[go]
+ANTHROPIC_API_KEY=sk-xxxxxxxxxxxxxxxx
+ANTHROPIC_BASE_URL=https://opencode.ai/zen/go
+ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-flash
 ```
 
-`ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are required. The model keys are optional.
+Set exactly one credential key and provide `ANTHROPIC_BASE_URL`:
+
+- `ANTHROPIC_API_KEY` sends the credential as `X-Api-Key` (for example, OpenCode Go).
+- `ANTHROPIC_AUTH_TOKEN` sends the credential as `Authorization: Bearer`.
+
+The model keys are optional. For OpenCode Go, omit `/v1` from the base URL because Claude Code appends the API path.
 
 ### Accounts
 
@@ -86,6 +98,7 @@ claude @work kimi   # 'work' account, using the kimi provider
 ```bash
 claude                # default account, official Anthropic Claude
 claude kimi           # switch provider (kimi, glm, ...)
+claude go             # OpenCode Go, using the [go] section
 claude @work          # named account in ~/.claude-work
 claude @work kimi     # named account with a provider
 claude --list         # list providers and accounts

@@ -199,6 +199,7 @@ clean_provider_env() {
 const fs = require('fs');
 const settingsPath = process.env.SETTINGS_PATH;
 const keysToRemove = [
+  'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_DEFAULT_SONNET_MODEL',
@@ -295,6 +296,7 @@ if [[ -n "$provider" ]]; then
     echo ">>> Using account: ${provider} (${CLAUDE_CONFIG_DIR})" >&2
   fi
 
+  api_key=$(get_ini_value "$provider" "ANTHROPIC_API_KEY")
   auth_token=$(get_ini_value "$provider" "ANTHROPIC_AUTH_TOKEN")
   [[ -z "${auth_token:-}" ]] && auth_token=$(get_ini_value "$provider" "API_KEY") # backward compat
 
@@ -316,19 +318,24 @@ if [[ -n "$provider" ]]; then
   [[ -z "${default_haiku:-}" ]] && default_haiku="$legacy_model"
   [[ -z "${default_opus:-}" ]] && default_opus="$legacy_model"
 
-  if [[ -z "${auth_token:-}" && -z "${base_url:-}" ]]; then
+  if [[ -n "${api_key:-}" && -n "${auth_token:-}" ]]; then
+    printf "✖ Provider [%s] sets both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN; choose the authentication scheme required by the provider.\n" "$provider" >&2
+    exit 1
+  fi
+
+  if [[ -z "${api_key:-}" && -z "${auth_token:-}" && -z "${base_url:-}" ]]; then
     if [[ -n "${config_dir:-}" ]]; then
       # Account-only section: official Anthropic login isolated in its own
       # config dir. Make sure no leftover provider env shadows the login.
       clean_provider_env "$SETTINGS_PATH"
       run_claude "$@"
     fi
-    printf "✖ Section [%s] defines neither provider keys (ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL) nor CLAUDE_CONFIG_DIR.\n" "$provider" >&2
+    printf "✖ Section [%s] defines neither provider keys nor CLAUDE_CONFIG_DIR.\n" "$provider" >&2
     exit 1
   fi
 
   missing=()
-  [[ -z "${auth_token:-}" ]] && missing+=("ANTHROPIC_AUTH_TOKEN")
+  [[ -z "${api_key:-}" && -z "${auth_token:-}" ]] && missing+=("ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN")
   [[ -z "${base_url:-}" ]] && missing+=("ANTHROPIC_BASE_URL")
 
   if (( ${#missing[@]} > 0 )); then
@@ -337,7 +344,7 @@ if [[ -n "$provider" ]]; then
   fi
 
   export SETTINGS_PATH PROVIDER="$provider"
-  export AUTH_TOKEN="$auth_token" BASE_URL="$base_url" DEFAULT_SONNET_MODEL="$default_sonnet" DEFAULT_HAIKU_MODEL="$default_haiku" DEFAULT_OPUS_MODEL="$default_opus"
+  export API_KEY="$api_key" AUTH_TOKEN="$auth_token" BASE_URL="$base_url" DEFAULT_SONNET_MODEL="$default_sonnet" DEFAULT_HAIKU_MODEL="$default_haiku" DEFAULT_OPUS_MODEL="$default_opus"
 
   node <<'NODE'
 const fs = require('fs');
@@ -349,6 +356,7 @@ const envUpdates = {};
 const maybeSet = (key, val) => {
   if (typeof val !== 'undefined' && val !== '') envUpdates[key] = val;
 };
+maybeSet('ANTHROPIC_API_KEY', process.env.API_KEY);
 maybeSet('ANTHROPIC_AUTH_TOKEN', process.env.AUTH_TOKEN);
 maybeSet('ANTHROPIC_BASE_URL', process.env.BASE_URL);
 maybeSet('ANTHROPIC_DEFAULT_SONNET_MODEL', process.env.DEFAULT_SONNET_MODEL);
@@ -368,7 +376,18 @@ if (fs.existsSync(settingsPath)) {
   }
 }
 
-data.env = { ...(data.env || {}), ...envUpdates };
+data.env = { ...(data.env || {}) };
+for (const key of [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
+]) {
+  delete data.env[key];
+}
+Object.assign(data.env, envUpdates);
 if (!data.permissions) data.permissions = { allow: [], deny: [] };
 if (typeof data.alwaysThinkingEnabled === 'undefined') data.alwaysThinkingEnabled = true;
 
@@ -423,6 +442,13 @@ ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic/
 ANTHROPIC_DEFAULT_SONNET_MODEL=glm-4.5
 ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-4.5-air
 ANTHROPIC_DEFAULT_OPUS_MODEL=glm-4.5
+
+[go]
+ANTHROPIC_API_KEY=sk-xxxxxxxxxxxxxxxx
+ANTHROPIC_BASE_URL=https://opencode.ai/zen/go
+ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
+ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-flash
 INI
   chmod 600 "$CONF_PATH" || true
 }
