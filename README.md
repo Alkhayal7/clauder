@@ -1,139 +1,112 @@
 # clauder
 
-A wrapper for the Claude Code CLI that adds provider switching (Kimi, GLM, Qwen, etc.) and multi-account support without modifying the official binary. Works on macOS, Linux (Bash/Zsh), and Windows (PowerShell).
-
-When a provider is selected, credentials are written to `~/.claude/settings.json`. When running plain `claude` (no provider), any previously injected provider config is removed automatically. Accounts isolate each login in its own folder, so you can run several Claude accounts (e.g. work and personal) at the same time.
-
-## Prerequisites
-
-The [Claude Code CLI](https://code.claude.com/docs/en/quickstart) must be installed before running the setup script.
-
-- **macOS / Linux:**
-  ```bash
-  curl -fsSL https://claude.ai/install.sh | bash
-  ```
-- **Windows:**
-  ```powershell
-  winget install Anthropic.ClaudeCode
-  ```
+Switch Claude Code providers and accounts. Supports macOS, Linux, and Windows. OpenAI-compatible providers require macOS/Linux and Python 3.9+.
 
 ## Install
 
-**macOS / Linux (Bash/Zsh):**
+Install [Claude Code](https://code.claude.com/docs/en/quickstart), then clone this repo:
 
 ```bash
 git clone https://github.com/Alkhayal7/clauder.git
 cd clauder
-bash cc-switch.sh
 ```
 
-Adds `~/bin` to PATH and writes the wrapper to `~/bin/claude`. Then open a new terminal or run `source ~/.bashrc` (or `~/.zshrc`); run `hash -r` if needed.
+**macOS / Linux:**
+
+```bash
+bash cc-switch.sh
+```
 
 **Windows (PowerShell):**
 
 ```powershell
-git clone https://github.com/Alkhayal7/clauder.git
-cd clauder
 ./cc-switch.ps1
 ```
 
-Writes the wrapper to `~/.clauder` and sources it from your PowerShell profile. Then open a new terminal (or run `. $PROFILE`).
+Open a new terminal after installation. The installer creates `~/.claude_providers.ini` if missing.
 
-If you get "running scripts is disabled on this system", enable local scripts once:
+## Configure
 
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
+Edit `~/.claude_providers.ini` and add your API keys. More provider examples are in [claude_providers.ini](claude_providers.ini).
 
-Both installers create a sample `~/.claude_providers.ini` if one doesn't exist.
-
-## Configuration
-
-Edit `~/.claude_providers.ini` (override path with `CLAUDE_CONF=/path/to/file`). On Windows this is `C:\Users\<you>\.claude_providers.ini` — open it with `notepad $HOME\.claude_providers.ini`.
+### OpenCode Go
 
 ```ini
-[kimi]
-ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
-ANTHROPIC_BASE_URL=https://api.kimi.com/coding/
-ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.5
-ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2.5
-ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.5
-
-[glm]
-ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
-ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic/
-ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5
-ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5
-ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5
-
-[deepseek]
-ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
-ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
-ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
-ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro
-
 [go]
-ANTHROPIC_API_KEY=sk-xxxxxxxxxxxxxxxx
 ANTHROPIC_BASE_URL=https://opencode.ai/zen/go
+ANTHROPIC_API_KEY=YOUR_OPENCODE_KEY
 ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
 ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
 ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro
+CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
+CLAUDE_CODE_DISABLE_ARTIFACT=1
 ```
 
-Set exactly one credential key and provide `ANTHROPIC_BASE_URL`:
-
-- `ANTHROPIC_API_KEY` sends the credential as `X-Api-Key` (for example, OpenCode Go).
-- `ANTHROPIC_AUTH_TOKEN` sends the credential as `Authorization: Bearer`.
-
-For OpenCode Go, omit `/v1` from the base URL because Claude Code appends the API path.
-
-The model keys are optional. Any other key in a section is written to `settings.json` as-is, so provider-specific settings work too:
+### TokenRouter / OpenAI-compatible
 
 ```ini
-[wafer]
-ANTHROPIC_API_KEY=wfr_xxxxxxxxxxxx
-ANTHROPIC_BASE_URL=https://pass.wafer.ai
-ANTHROPIC_DEFAULT_SONNET_MODEL=DeepSeek-V4-Flash-0731-Fast
-ANTHROPIC_DEFAULT_HAIKU_MODEL=DeepSeek-V4-Flash-0731-Fast
-ANTHROPIC_DEFAULT_OPUS_MODEL=DeepSeek-V4-Flash-0731-Fast
-CLAUDE_CODE_SUBAGENT_MODEL=DeepSeek-V4-Flash-0731-Fast
-ANTHROPIC_CUSTOM_HEADERS=Wafer-ZDR: required
+[tokenrouter]
+API_FORMAT=openai
+ANTHROPIC_BASE_URL=https://api.tokenrouter.com/v1
+ANTHROPIC_API_KEY=YOUR_TOKENROUTER_KEY
+ANTHROPIC_DEFAULT_SONNET_MODEL=z-ai/glm-5.3-free
+ANTHROPIC_DEFAULT_HAIKU_MODEL=z-ai/glm-5.3-free
+ANTHROPIC_DEFAULT_OPUS_MODEL=z-ai/glm-5.3-free
+CLAUDE_CODE_SUBAGENT_MODEL=z-ai/glm-5.3-free
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000
 ```
 
-Quotes around a value are optional and stripped, so `KEY=value` and `KEY="value"` mean the same thing. Switching providers removes any key the new section does not define.
+`API_FORMAT=openai` starts a local adapter automatically and stops it when Claude exits. It sends OpenAI Chat Completions requests with Bearer authentication. Keep `/v1` in the TokenRouter URL; omit it for OpenCode Go.
 
-Claude Code assumes a 200k context window for model names it doesn't recognize. If a provider's model has a larger one, append `[1m]` to the name (`deepseek-v4-flash[1m]`) or set `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, so auto-compact uses the real limit.
+For Anthropic-compatible providers, use exactly one credential: `ANTHROPIC_API_KEY` for `X-Api-Key`, or `ANTHROPIC_AUTH_TOKEN` for Bearer authentication. Additional environment variables pass through to Claude settings. Override the config path with `CLAUDE_CONF`.
 
-### Accounts
+### Local model
 
-Prefix any name with `@` to run it as a separate account, stored in its own `~/.claude-<name>` folder (created on first use). Plain `claude` is the default account (`~/.claude`). Each account has its own login, so you can run several at once in separate terminals.
-
-```bash
-claude              # default account (~/.claude)
-claude @work        # 'work' account (~/.claude-work)
-claude @work kimi   # 'work' account, using the kimi provider
+```ini
+[local]
+API_FORMAT=openai
+ANTHROPIC_BASE_URL=http://192.168.0.170:4009/v1
+ANTHROPIC_API_KEY=local
+ANTHROPIC_DEFAULT_SONNET_MODEL=openai/gpt-oss-20b
+ANTHROPIC_DEFAULT_HAIKU_MODEL=openai/gpt-oss-20b
+ANTHROPIC_DEFAULT_OPUS_MODEL=openai/gpt-oss-20b
+CLAUDE_CODE_SUBAGENT_MODEL=openai/gpt-oss-20b
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=124000
 ```
 
-> On Windows PowerShell, quote the name so it isn't read as splatting: `claude "@work"`.
+Use your server's address and model ID. `local` is a placeholder key for servers without authentication; replace it if your server requires a key.
+
+Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` per provider to control the context limit Claude uses for auto-compaction. Match your model or server limit, or choose a lower value; this does not increase the server’s capacity.
 
 ## Usage
 
 ```bash
-claude                # default account, official Anthropic Claude
-claude kimi           # switch provider (kimi, glm, ...)
-claude go             # OpenCode Go, using the [go] section
-claude @work          # named account in ~/.claude-work
-claude @work kimi     # named account with a provider
-claude --list         # list providers and accounts
+claude                 # official Anthropic; clears provider settings
+claude go              # OpenCode Go
+claude tokenrouter     # TokenRouter through the OpenAI adapter
+claude local           # local model through the OpenAI adapter
+claude kimi            # any provider section in your config
+claude @work           # separate account in ~/.claude-work
+claude @work go         # separate account with a provider
+claude --list          # list providers and accounts
 ```
 
-## Maintenance
+In PowerShell, quote account names: `claude "@work"`.
+
+## Update / Remove
 
 ```bash
-# macOS / Linux
-bash cc-switch.sh update             # update the wrapper
-bash cc-switch.sh status             # show diagnostics
-bash cc-switch.sh uninstall          # remove wrapper
-bash cc-switch.sh uninstall --purge  # remove wrapper and config
+bash cc-switch.sh update
+bash cc-switch.sh status
+bash cc-switch.sh uninstall
+bash cc-switch.sh uninstall --purge  # also remove config
 ```
+
+On Windows, rerun `./cc-switch.ps1` to update.
+
+## Adapter limits
+
+Streaming, tool calls, user images, and JSON-schema output are supported. Token counts are approximate; Anthropic reasoning settings are not forwarded. Documents, image tool results, and Anthropic server-side tools are unsupported.
+
+Run tests: `python3 -m unittest discover -s tests -v`.

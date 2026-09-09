@@ -124,6 +124,9 @@ ensure_path_prefix() {
 # Wrapper
 # ------------------------
 write_wrapper() {
+  local adapter_source="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/openai-adapter.py"
+  mkdir -p "${TARGET_HOME}/.clauder"
+  install -m 700 "$adapter_source" "${TARGET_HOME}/.clauder/openai-adapter.py"
   local tmp="${WRAPPER_PATH}.tmp.$$"
   cat > "$tmp" <<'SH'
 #!/usr/bin/env bash
@@ -146,7 +149,7 @@ ANTHROPIC_DEFAULT_OPUS_MODEL'
 # ANTHROPIC_* name, never exported to settings.json verbatim.
 is_config_only_key() {
   case "$1" in
-    CLAUDE_CONFIG_DIR|API_KEY|BASE_URL|MODEL|SMALL_FAST_MODE|ANTHROPIC_MODEL|ANTHROPIC_SMALL_FAST_MODE) return 0 ;;
+    API_FORMAT|CLAUDE_CONFIG_DIR|API_KEY|BASE_URL|MODEL|SMALL_FAST_MODE|ANTHROPIC_MODEL|ANTHROPIC_SMALL_FAST_MODE) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -339,6 +342,10 @@ run_claude() {
   local p
   for p in "${candidates[@]}"; do
     if [[ -x "$p" && "$p" != "$self_path" ]]; then
+      if [[ "${api_format:-anthropic}" == "openai" ]]; then
+        CLAUDER_OPENAI_BASE_URL="$base_url" CLAUDER_OPENAI_API_KEY="${api_key:-$auth_token}" \
+          exec python3 "$HOME/.clauder/openai-adapter.py" "$p" "$@"
+      fi
       exec "$p" "$@"
     fi
   done
@@ -374,6 +381,16 @@ fi
 
 if [[ -n "$provider" ]]; then
   section="$(read_section "$provider")"
+  api_format=$(section_get "$section" "API_FORMAT")
+  api_format="${api_format:-anthropic}"
+  case "$api_format" in
+    anthropic) ;;
+    openai)
+      command -v python3 >/dev/null 2>&1 || { echo 'OpenAI adapter requires Python 3.9+.' >&2; exit 1; }
+      [[ -f "$HOME/.clauder/openai-adapter.py" ]] || { echo 'OpenAI adapter missing; run bash cc-switch.sh update.' >&2; exit 1; }
+      ;;
+    *) printf 'Unknown API_FORMAT: %s (use anthropic or openai).\n' "$api_format" >&2; exit 1 ;;
+  esac
 
   # ---- account support: a section may pin its own CLAUDE_CONFIG_DIR so
   # separate logins (e.g. work/personal) can run side by side ----
@@ -474,53 +491,8 @@ write_sample_conf_if_absent() {
     warn "Config already exists: $CONF_PATH (leaving it untouched)."
     return 0
   fi
-  cat > "$CONF_PATH" <<'INI'
-# Providers (Anthropic-compatible API)
-# Usage: claude <provider_name> [args...]
-#        claude [args...] (uses official Anthropic Claude)
-#
-# Any other key in a section is written to settings.json as-is, e.g.
-# CLAUDE_CODE_SUBAGENT_MODEL or ANTHROPIC_CUSTOM_HEADERS. Quotes around a
-# value are optional and stripped, so KEY=value and KEY="value" are the same.
-
-# Accounts — run multiple Claude Code logins side by side.
-# A section with CLAUDE_CONFIG_DIR keeps its own login/settings in that folder.
-# First run of 'claude work' will prompt you to log in with that account.
-#
-# [work]
-# CLAUDE_CONFIG_DIR=~/.claude-work
-#
-# [personal]
-# CLAUDE_CONFIG_DIR=~/.claude-personal
-
-[kimi]
-ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
-ANTHROPIC_BASE_URL=https://api.kimi.com/coding/
-ANTHROPIC_DEFAULT_SONNET_MODEL=kimi-k2.5
-ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2.5
-ANTHROPIC_DEFAULT_OPUS_MODEL=kimi-k2.5
-
-[glm]
-ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
-ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic/
-ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5
-ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-5
-ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5
-
-[deepseek]
-ANTHROPIC_AUTH_TOKEN=sk-xxxxxxxxxxxxxxxx
-ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
-ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
-ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro
-
-[go]
-ANTHROPIC_API_KEY=sk-xxxxxxxxxxxxxxxx
-ANTHROPIC_BASE_URL=https://opencode.ai/zen/go
-ANTHROPIC_DEFAULT_SONNET_MODEL=deepseek-v4-flash
-ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
-ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro
-INI
+  local sample_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude_providers.ini"
+  cp "$sample_path" "$CONF_PATH"
   chmod 600 "$CONF_PATH" || true
 }
 
@@ -594,6 +566,7 @@ cmd_uninstall() {
   if [ -f "${WRAPPER_PATH}" ]; then
     echo "Removing wrapper at ${WRAPPER_PATH}..."
     rm -f "${WRAPPER_PATH}"
+    rm -f "${TARGET_HOME}/.clauder/openai-adapter.py"
     msg "Removed wrapper."
   else
     warn "Wrapper not found at ${WRAPPER_PATH}."
